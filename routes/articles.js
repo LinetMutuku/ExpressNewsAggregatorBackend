@@ -4,25 +4,10 @@ const Article = require('../models/Article');
 const { getRecommendedArticles, markArticleAsRead } = require('../services/newsService');
 const { authenticateUser } = require('../middleware/auth');
 
-// Get recommended articles
-router.get('/recommended', authenticateUser, async (req, res) => {
-    try {
-        console.log('Authenticated user ID:', req.userId);
-        const page = Math.max(1, parseInt(req.query.page) || 1);
-        const limit = Math.min(20, Math.max(1, parseInt(req.query.limit) || 20));
-        const recommendedArticles = await getRecommendedArticles(req.userId, page, limit);
-        res.json(recommendedArticles);
-    } catch (error) {
-        console.error('Error in /recommended route:', error);
-        if (error.message === 'User not found') {
-            res.status(404).json({ message: 'User not found', error: error.message });
-        } else {
-            res.status(500).json({ message: 'Error fetching recommended articles', error: error.message });
-        }
-    }
-});
+// Adding indexes to MongoDB schema
+Article.createIndexes({ category: 1, publishedAt: -1 });
 
-// Getting all articles with pagination and filtering
+// Optimized query for getting articles
 router.get('/', async (req, res) => {
     try {
         const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -35,10 +20,7 @@ router.get('/', async (req, res) => {
             query.category = category;
         }
         if (search) {
-            query.$or = [
-                { title: { $regex: search, $options: 'i' } },
-                { description: { $regex: search, $options: 'i' } }
-            ];
+            query.$text = { $search: search }; // Leverage MongoDB's text search
         }
 
         const articles = await Article.find(query)
@@ -57,6 +39,24 @@ router.get('/', async (req, res) => {
     } catch (error) {
         console.error('Error fetching articles:', error);
         res.status(500).json({ message: 'Error fetching articles', error: error.message });
+    }
+});
+
+// Get recommended articles
+router.get('/recommended', authenticateUser, async (req, res) => {
+    try {
+        console.log('Authenticated user ID:', req.userId);
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(20, Math.max(1, parseInt(req.query.limit) || 20));
+        const recommendedArticles = await getRecommendedArticles(req.userId, page, limit);
+        res.json(recommendedArticles);
+    } catch (error) {
+        console.error('Error in /recommended route:', error);
+        if (error.message === 'User not found') {
+            res.status(404).json({ message: 'User not found', error: error.message });
+        } else {
+            res.status(500).json({ message: 'Error fetching recommended articles', error: error.message });
+        }
     }
 });
 

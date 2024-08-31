@@ -6,24 +6,39 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: true,
         unique: true,
-        trim: true
+        trim: true,
+        minlength: 3
     },
     email: {
         type: String,
         required: true,
         unique: true,
         trim: true,
-        lowercase: true
+        lowercase: true,
+        match: [/.+@.+\..+/, 'Please enter a valid email address']
     },
     password: {
         type: String,
-        required: true
+        required: true,
+        minlength: 6
     },
     preferences: {
-        categories: [String],
-        sources: [String],
-        darkMode: { type: Boolean, default: false },
-        notifications: { type: Boolean, default: false }
+        categories: {
+            type: [String],
+            default: []
+        },
+        sources: {
+            type: [String],
+            default: []
+        },
+        darkMode: {
+            type: Boolean,
+            default: false
+        },
+        notifications: {
+            type: Boolean,
+            default: false
+        }
     },
     savedArticles: [{
         type: mongoose.Schema.Types.ObjectId,
@@ -40,8 +55,9 @@ const UserSchema = new mongoose.Schema({
     lastLogin: {
         type: Date
     }
-});
+}, { timestamps: true });
 
+// Hash password before saving the user
 UserSchema.pre('save', async function(next) {
     if (!this.isModified('password')) return next();
     try {
@@ -53,11 +69,22 @@ UserSchema.pre('save', async function(next) {
     }
 });
 
+// Compare provided password with the stored hash
 UserSchema.methods.comparePassword = async function(candidatePassword) {
     try {
         return await bcrypt.compare(candidatePassword, this.password);
     } catch (error) {
-        throw error;
+        throw new Error('Error comparing passwords');
+    }
+};
+
+// Update last login date
+UserSchema.methods.updateLastLogin = async function() {
+    try {
+        this.lastLogin = new Date();
+        await this.save();
+    } catch (error) {
+        throw new Error('Error updating last login');
     }
 };
 

@@ -1,6 +1,9 @@
 const axios = require('axios');
 const Article = require('../models/Article');
 const User = require('../models/User');
+const NodeCache = require('node-cache'); // Simple caching solution
+
+const articleCache = new NodeCache({ stdTTL: 3600 }); // Cache articles for 1 hour
 
 async function fetchAndStoreArticles() {
     try {
@@ -9,26 +12,28 @@ async function fetchAndStoreArticles() {
             throw new Error('NEWS_API_KEY is not set in environment variables');
         }
 
+        // Get cached articles
+        const cachedArticles = articleCache.get('articles');
+        if (cachedArticles) {
+            console.log('Serving articles from cache');
+            return;
+        }
+
         // Get the date for 30 days ago
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         const fromDate = thirtyDaysAgo.toISOString().split('T')[0];
 
         const url = `https://newsapi.org/v2/everything?q=technology&from=${fromDate}&sortBy=publishedAt&apiKey=${apiKey}`;
-
         console.log('Fetching articles from:', url);
 
         const response = await axios.get(url);
-        console.log('API Response Status:', response.status);
-
         const articles = response.data.articles;
 
         if (!articles || articles.length === 0) {
             console.log('No articles fetched from the API');
             return;
         }
-
-        console.log(`Fetched ${articles.length} articles from the API`);
 
         let storedCount = 0;
         const currentDate = new Date();
@@ -59,6 +64,9 @@ async function fetchAndStoreArticles() {
                 console.error(`Error storing article: ${article.url}`, err);
             }
         }
+
+        // Cache the articles
+        articleCache.set('articles', articles);
 
         console.log(`Successfully stored ${storedCount} articles`);
     } catch (error) {
