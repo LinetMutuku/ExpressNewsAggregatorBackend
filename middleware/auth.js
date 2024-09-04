@@ -1,5 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const NodeCache = require('node-cache');
+
+const userCache = new NodeCache({ stdTTL: 300 }); // Cache for 5 minutes
 
 exports.authenticateUser = async (req, res, next) => {
     const token = req.header('Authorization')?.replace('Bearer ', '');
@@ -9,10 +12,16 @@ exports.authenticateUser = async (req, res, next) => {
 
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await User.findById(decoded.user.id);
+
+        let user = userCache.get(decoded.user.id);
         if (!user) {
-            return res.status(401).json({ message: 'User not found' });
+            user = await User.findById(decoded.user.id).select('-password').lean();
+            if (!user) {
+                return res.status(401).json({ message: 'User not found' });
+            }
+            userCache.set(decoded.user.id, user);
         }
+
         req.user = user;
         req.userId = user._id;
         next();

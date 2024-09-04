@@ -1,9 +1,10 @@
 const axios = require('axios');
 const Article = require('../models/Article');
 const User = require('../models/User');
-const NodeCache = require('node-cache'); // Simple caching solution
+const NodeCache = require('node-cache');
 
 const articleCache = new NodeCache({ stdTTL: 3600 }); // Cache articles for 1 hour
+const recommendationCache = new NodeCache({ stdTTL: 300 }); // Cache recommendations for 5 minutes
 
 async function fetchAndStoreArticles() {
     try {
@@ -12,14 +13,13 @@ async function fetchAndStoreArticles() {
             throw new Error('NEWS_API_KEY is not set in environment variables');
         }
 
-        // Get cached articles
-        const cachedArticles = articleCache.get('articles');
-        if (cachedArticles) {
-            console.log('Serving articles from cache');
+        // Check if we've fetched articles recently
+        const lastFetchTime = articleCache.get('lastFetchTime');
+        if (lastFetchTime && Date.now() - lastFetchTime < 3600000) { // 1 hour
+            console.log('Skipping API call, using cached articles');
             return;
         }
 
-        // Get the date for 30 days ago
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         const fromDate = thirtyDaysAgo.toISOString().split('T')[0];
@@ -35,40 +35,36 @@ async function fetchAndStoreArticles() {
             return;
         }
 
-        let storedCount = 0;
         const currentDate = new Date();
-
-        for (let article of articles) {
-            try {
-                const publishedAt = new Date(article.publishedAt);
-                if (publishedAt > currentDate) {
-                    console.log(`Skipping article with future date: ${article.title}`);
-                    continue;
-                }
-
-                await Article.findOneAndUpdate(
-                    { url: article.url },
-                    {
-                        title: article.title,
-                        description: article.description,
-                        url: article.url,
-                        imageUrl: article.urlToImage,
-                        source: article.source.name,
-                        publishedAt: publishedAt,
-                        category: determineCategorization(article.title, article.description)
+        const bulkOps = articles
+            .filter(article => new Date(article.publishedAt) <= currentDate)
+            .map(article => ({
+                updateOne: {
+                    filter: { url: article.url },
+                    update: {
+                        $set: {
+                            title: article.title,
+                            description: article.description,
+                            url: article.url,
+                            imageUrl: article.urlToImage,
+                            source: article.source.name,
+                            publishedAt: new Date(article.publishedAt),
+                            category: determineCategorization(article.title, article.description)
+                        }
                     },
-                    { upsert: true, new: true }
-                );
-                storedCount++;
-            } catch (err) {
-                console.error(`Error storing article: ${article.url}`, err);
-            }
+                    upsert: true
+                }
+            }));
+
+        if (bulkOps.length > 0) {
+            const result = await Article.bulkWrite(bulkOps);
+            console.log(`Upserted ${result.upsertedCount} articles, modified ${result.modifiedCount} articles`);
         }
 
-        // Cache the articles
-        articleCache.set('articles', articles);
+        // Update cache
+        articleCache.set('lastFetchTime', Date.now());
+        recommendationCache.flushAll(); // Clear recommendation cache as we have new articles
 
-        console.log(`Successfully stored ${storedCount} articles`);
     } catch (error) {
         console.error('Error fetching and storing articles:', error);
         if (error.response) {
@@ -89,8 +85,14 @@ function determineCategorization(title, description) {
 }
 
 async function getRecommendedArticles(userId, page = 1, limit = 20) {
+    const cacheKey = `recommendations_${userId}_${page}_${limit}`;
+    const cachedRecommendations = recommendationCache.get(cacheKey);
+    if (cachedRecommendations) {
+        return cachedRecommendations;
+    }
+
     try {
-        const user = await User.findById(userId);
+        const user = await User.findById(userId).select('preferences readArticles');
         if (!user) {
             throw new Error('User not found');
         }
@@ -109,9 +111,20 @@ async function getRecommendedArticles(userId, page = 1, limit = 20) {
         const recommendedArticles = await Article.find(query)
             .sort({ publishedAt: -1 })
             .skip((page - 1) * limit)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
-        return recommendedArticles;
+        const totalArticles = await Article.countDocuments(query);
+
+        const result = {
+            articles: recommendedArticles,
+            currentPage: page,
+            totalPages: Math.ceil(totalArticles / limit),
+            totalArticles: totalArticles
+        };
+
+        recommendationCache.set(cacheKey, result);
+        return result;
     } catch (error) {
         console.error('Error in recommendation service:', error);
         throw error;
@@ -120,15 +133,17 @@ async function getRecommendedArticles(userId, page = 1, limit = 20) {
 
 async function markArticleAsRead(userId, articleId) {
     try {
-        const user = await User.findById(userId);
-        if (!user) {
-            throw new Error('User not found');
+        const result = await User.updateOne(
+            { _id: userId },
+            { $addToSet: { readArticles: articleId } }
+        );
+
+        if (result.nModified === 0) {
+            throw new Error('User not found or article already marked as read');
         }
 
-        if (!user.readArticles.includes(articleId)) {
-            user.readArticles.push(articleId);
-            await user.save();
-        }
+        // Clear the recommendation cache for this user
+        recommendationCache.del(new RegExp(`^recommendations_${userId}_`));
 
         return { message: 'Article marked as read' };
     } catch (error) {
