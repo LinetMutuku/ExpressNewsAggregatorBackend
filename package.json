@@ -21,6 +21,7 @@
     "node-cache": "^5.1.2",
     "node-cron": "^3.0.3",
     "pug": "2.0.0-beta11",
+    "redis": "^4.7.0",
     "validator": "^13.12.0"
   }
 }
