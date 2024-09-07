@@ -1,10 +1,32 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const redis = require('redis');
 require('dotenv').config();
 const { fetchAndStoreArticles } = require('./services/newsService');
 
 const app = express();
+
+// Redis setup
+const redisClient = redis.createClient({
+    url: `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`
+});
+
+redisClient.on('error', (error) => {
+    console.error('Redis error:', error);
+});
+
+redisClient.connect().then(() => {
+    console.log('Connected to Redis');
+}).catch((err) => {
+    console.error('Redis connection error:', err);
+});
+
+// Make Redis client available to all routes
+app.use((req, res, next) => {
+    req.redisClient = redisClient;
+    next();
+});
 
 // CORS configuration
 app.use(cors({
@@ -28,6 +50,19 @@ const userRoutes = require('./routes/users');
 app.use('/api/auth', authRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/users', userRoutes);
+
+// Add a test route for Redis
+app.get('/test-redis', async (req, res) => {
+    try {
+        await redisClient.set('test_key', 'Hello Redis!', {
+            EX: 60
+        });
+        const value = await redisClient.get('test_key');
+        res.json({ message: 'Redis test successful', value });
+    } catch (error) {
+        res.status(500).json({ message: 'Redis test failed', error: error.message });
+    }
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -57,7 +92,10 @@ process.on('SIGTERM', () => {
         console.log('HTTP server closed');
         mongoose.connection.close(false, () => {
             console.log('MongoDB connection closed');
-            process.exit(0);
+            redisClient.quit().then(() => {
+                console.log('Redis connection closed');
+                process.exit(0);
+            });
         });
     });
 });

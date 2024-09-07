@@ -6,6 +6,7 @@ const { authenticateUser } = require('../middleware/auth');
 const NodeCache = require('node-cache');
 
 const articleCache = new NodeCache({ stdTTL: 300 }); // Cache for 5 minutes
+const REDIS_CACHE_DURATION = 300; // 5 minutes
 
 // Optimized query for getting articles
 router.get('/', async (req, res) => {
@@ -16,10 +17,17 @@ router.get('/', async (req, res) => {
         const search = req.query.search;
 
         const cacheKey = `articles_${page}_${limit}_${category}_${search}`;
-        const cachedResult = articleCache.get(cacheKey);
 
+        // Try Redis first
+        const cachedResult = await req.getAsync(cacheKey);
         if (cachedResult) {
-            return res.json(cachedResult);
+            return res.json(JSON.parse(cachedResult));
+        }
+
+        // If not in Redis, check NodeCache
+        const nodeCachedResult = articleCache.get(cacheKey);
+        if (nodeCachedResult) {
+            return res.json(nodeCachedResult);
         }
 
         let query = {};
@@ -45,7 +53,12 @@ router.get('/', async (req, res) => {
             totalArticles: total
         };
 
+        // Set in Redis
+        await req.setexAsync(cacheKey, REDIS_CACHE_DURATION, JSON.stringify(result));
+
+        // Set in NodeCache as fallback
         articleCache.set(cacheKey, result);
+
         res.json(result);
     } catch (error) {
         console.error('Error fetching articles:', error);
@@ -58,7 +71,7 @@ router.get('/recommended', authenticateUser, async (req, res) => {
     try {
         const page = Math.max(1, parseInt(req.query.page) || 1);
         const limit = Math.min(20, Math.max(1, parseInt(req.query.limit) || 20));
-        const recommendedArticles = await getRecommendedArticles(req.userId, page, limit);
+        const recommendedArticles = await getRecommendedArticles(req, req.userId, page, limit);
         res.json(recommendedArticles);
     } catch (error) {
         console.error('Error in /recommended route:', error);
@@ -73,9 +86,18 @@ router.get('/recommended', authenticateUser, async (req, res) => {
 // Getting a single article by ID
 router.get('/:id', async (req, res) => {
     try {
-        const cachedArticle = articleCache.get(req.params.id);
+        const cacheKey = `article_${req.params.id}`;
+
+        // Try Redis first
+        const cachedArticle = await req.getAsync(cacheKey);
         if (cachedArticle) {
-            return res.json(cachedArticle);
+            return res.json(JSON.parse(cachedArticle));
+        }
+
+        // If not in Redis, check NodeCache
+        const nodeCachedArticle = articleCache.get(cacheKey);
+        if (nodeCachedArticle) {
+            return res.json(nodeCachedArticle);
         }
 
         const article = await Article.findById(req.params.id).lean();
@@ -83,7 +105,12 @@ router.get('/:id', async (req, res) => {
             return res.status(404).json({ message: 'Article not found' });
         }
 
-        articleCache.set(req.params.id, article);
+        // Set in Redis
+        await req.setexAsync(cacheKey, REDIS_CACHE_DURATION, JSON.stringify(article));
+
+        // Set in NodeCache as fallback
+        articleCache.set(cacheKey, article);
+
         res.json(article);
     } catch (error) {
         console.error('Error fetching article:', error);
