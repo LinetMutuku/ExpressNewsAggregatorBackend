@@ -2,24 +2,11 @@ const Article = require('../models/Article');
 const User = require('../models/User');
 const mongoose = require('mongoose');
 
-const CACHE_DURATION = 3600; // Cache for 1 hour
-
-async function getRecommendedArticles(req, userId, page = 1, limit = 20) {
+async function getRecommendedArticles(userId, page = 1, limit = 20) {
     try {
         if (!mongoose.Types.ObjectId.isValid(userId)) {
             throw new Error('Invalid userId format');
         }
-
-        const cacheKey = `recommended_articles:${userId}:${page}:${limit}`;
-
-        // Check cache first
-        const cachedData = await req.getAsync(cacheKey);
-        if (cachedData) {
-            console.log('Cache hit for recommended articles');
-            return JSON.parse(cachedData);
-        }
-
-        console.log('Cache miss for recommended articles, fetching from DB');
 
         const user = await User.findById(userId);
         if (!user) {
@@ -56,7 +43,8 @@ async function getRecommendedArticles(req, userId, page = 1, limit = 20) {
                     $or: [
                         { category: { $in: user.preferences || [] } },
                         { title: { $regex: sortedKeywords.join('|'), $options: 'i' } }
-                    ]
+                    ],
+                    _id: { $nin: user.readArticles || [] } // Exclude already read articles
                 }
             },
             {
@@ -81,10 +69,20 @@ async function getRecommendedArticles(req, userId, page = 1, limit = 20) {
             { $limit: limit }
         ]);
 
-        // Set cache
-        await req.setexAsync(cacheKey, CACHE_DURATION, JSON.stringify(recommendedArticles));
+        const totalRecommendations = await Article.countDocuments({
+            $or: [
+                { category: { $in: user.preferences || [] } },
+                { title: { $regex: sortedKeywords.join('|'), $options: 'i' } }
+            ],
+            _id: { $nin: user.readArticles || [] }
+        });
 
-        return recommendedArticles;
+        return {
+            recommendations: recommendedArticles,
+            currentPage: page,
+            totalPages: Math.ceil(totalRecommendations / limit),
+            totalRecommendations
+        };
     } catch (error) {
         console.error('Error in recommendation service:', error);
         throw error;

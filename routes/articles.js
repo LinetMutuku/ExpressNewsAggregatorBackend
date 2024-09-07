@@ -1,41 +1,29 @@
 const express = require('express');
 const router = express.Router();
 const Article = require('../models/Article');
-const { getRecommendedArticles, markArticleAsRead } = require('../services/newsService');
+const User = require('../models/User');
 const { authenticateUser } = require('../middleware/auth');
-const NodeCache = require('node-cache');
+const { getRecommendedArticles } = require('../services/RecommendedArticles');
 
-const articleCache = new NodeCache({ stdTTL: 300 }); // Cache for 5 minutes
-const REDIS_CACHE_DURATION = 300; // 5 minutes
-
-// Optimized query for getting articles
+// Get all articles with caching
 router.get('/', async (req, res) => {
     try {
-        const page = Math.max(1, parseInt(req.query.page) || 1);
-        const limit = Math.min(20, Math.max(1, parseInt(req.query.limit) || 20));
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
         const category = req.query.category;
-        const search = req.query.search;
+        const cacheKey = `articles:${page}:${limit}:${category || 'all'}`;
 
-        const cacheKey = `articles_${page}_${limit}_${category}_${search}`;
+        // Try to get articles from Redis
+        let cachedArticles = await req.redisClient.get(cacheKey);
 
-        // Try Redis first
-        const cachedResult = await req.getAsync(cacheKey);
-        if (cachedResult) {
-            return res.json(JSON.parse(cachedResult));
+        if (cachedArticles) {
+            return res.json(JSON.parse(cachedArticles));
         }
 
-        // If not in Redis, check NodeCache
-        const nodeCachedResult = articleCache.get(cacheKey);
-        if (nodeCachedResult) {
-            return res.json(nodeCachedResult);
-        }
-
+        // If not in cache, fetch from database
         let query = {};
         if (category) {
             query.category = category;
-        }
-        if (search) {
-            query.$text = { $search: search };
         }
 
         const articles = await Article.find(query)
@@ -44,20 +32,19 @@ router.get('/', async (req, res) => {
             .limit(limit)
             .lean();
 
-        const total = await Article.countDocuments(query);
+        const totalArticles = await Article.countDocuments(query);
 
         const result = {
             articles,
             currentPage: page,
-            totalPages: Math.ceil(total / limit),
-            totalArticles: total
+            totalPages: Math.ceil(totalArticles / limit),
+            totalArticles
         };
 
-        // Set in Redis
-        await req.setexAsync(cacheKey, REDIS_CACHE_DURATION, JSON.stringify(result));
-
-        // Set in NodeCache as fallback
-        articleCache.set(cacheKey, result);
+        // Cache the result
+        await req.redisClient.set(cacheKey, JSON.stringify(result), {
+            EX: 300 // Cache for 5 minutes
+        });
 
         res.json(result);
     } catch (error) {
@@ -66,70 +53,134 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Get recommended articles
-router.get('/recommended', authenticateUser, async (req, res) => {
+// Search articles with caching
+router.get('/search', async (req, res) => {
     try {
-        const page = Math.max(1, parseInt(req.query.page) || 1);
-        const limit = Math.min(20, Math.max(1, parseInt(req.query.limit) || 20));
-        const recommendedArticles = await getRecommendedArticles(req, req.userId, page, limit);
-        res.json(recommendedArticles);
-    } catch (error) {
-        console.error('Error in /recommended route:', error);
-        if (error.message === 'User not found') {
-            res.status(404).json({ message: 'User not found', error: error.message });
-        } else {
-            res.status(500).json({ message: 'Error fetching recommended articles', error: error.message });
+        const { query } = req.query;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const cacheKey = `search:${query}:${page}:${limit}`;
+
+        // Try to get search results from Redis
+        let cachedResults = await req.redisClient.get(cacheKey);
+
+        if (cachedResults) {
+            return res.json(JSON.parse(cachedResults));
         }
+
+        // If not in cache, perform search in database
+        const results = await Article.find(
+            { $text: { $search: query } },
+            { score: { $meta: "textScore" } }
+        )
+            .sort({ score: { $meta: "textScore" } })
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .lean();
+
+        const totalResults = await Article.countDocuments({ $text: { $search: query } });
+
+        const response = {
+            results,
+            currentPage: page,
+            totalPages: Math.ceil(totalResults / limit),
+            totalResults
+        };
+
+        // Store in Redis for future requests
+        await req.redisClient.set(cacheKey, JSON.stringify(response), {
+            EX: 900 // Cache for 15 minutes
+        });
+
+        res.json(response);
+    } catch (error) {
+        console.error('Error searching articles:', error);
+        res.status(500).json({ message: 'Error searching articles', error: error.message });
     }
 });
 
-// Getting a single article by ID
-router.get('/:id', async (req, res) => {
+// Get recommended articles
+router.get('/recommended', authenticateUser, async (req, res) => {
     try {
-        const cacheKey = `article_${req.params.id}`;
+        const userId = req.userId;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const cacheKey = `recommended:${userId}:${page}:${limit}`;
 
-        // Try Redis first
-        const cachedArticle = await req.getAsync(cacheKey);
-        if (cachedArticle) {
-            return res.json(JSON.parse(cachedArticle));
+        // Try to get recommended articles from Redis
+        let recommendedArticles = await req.redisClient.get(cacheKey);
+
+        if (recommendedArticles) {
+            return res.json(JSON.parse(recommendedArticles));
         }
 
-        // If not in Redis, check NodeCache
-        const nodeCachedArticle = articleCache.get(cacheKey);
-        if (nodeCachedArticle) {
-            return res.json(nodeCachedArticle);
-        }
+        // If not in cache, get recommendations
+        recommendedArticles = await getRecommendedArticles(userId, page, limit);
 
-        const article = await Article.findById(req.params.id).lean();
-        if (!article) {
-            return res.status(404).json({ message: 'Article not found' });
-        }
+        // Store in Redis for future requests
+        await req.redisClient.set(cacheKey, JSON.stringify(recommendedArticles), {
+            EX: 1800 // Cache for 30 minutes
+        });
 
-        // Set in Redis
-        await req.setexAsync(cacheKey, REDIS_CACHE_DURATION, JSON.stringify(article));
-
-        // Set in NodeCache as fallback
-        articleCache.set(cacheKey, article);
-
-        res.json(article);
+        res.json(recommendedArticles);
     } catch (error) {
-        console.error('Error fetching article:', error);
-        res.status(500).json({ message: 'Error fetching article', error: error.message });
+        console.error('Error in /recommended route:', error);
+        res.status(500).json({ message: 'Error fetching recommended articles', error: error.message });
     }
 });
 
 // Mark an article as read
 router.post('/:id/read', authenticateUser, async (req, res) => {
     try {
-        await markArticleAsRead(req.userId, req.params.id);
+        const articleId = req.params.id;
+        const userId = req.userId;
+
+        // Update user's read articles
+        await User.findByIdAndUpdate(userId, { $addToSet: { readArticles: articleId } });
+
+        // Invalidate the user's recommended articles cache
+        const cachePattern = `recommended:${userId}:*`;
+        const keys = await req.redisClient.keys(cachePattern);
+        if (keys.length > 0) {
+            await req.redisClient.del(keys);
+        }
+
         res.json({ message: 'Article marked as read' });
     } catch (error) {
         console.error('Error marking article as read:', error);
-        if (error.message === 'User not found' || error.message === 'Article not found') {
-            res.status(404).json({ message: error.message });
-        } else {
-            res.status(500).json({ message: 'Error marking article as read', error: error.message });
+        res.status(500).json({ message: 'Error marking article as read', error: error.message });
+    }
+});
+
+// Get a single article by ID with caching
+router.get('/:id', async (req, res) => {
+    try {
+        const articleId = req.params.id;
+        const cacheKey = `article:${articleId}`;
+
+        // Try to get the article from Redis
+        let article = await req.redisClient.get(cacheKey);
+
+        if (article) {
+            return res.json(JSON.parse(article));
         }
+
+        // If not in cache, get from database
+        article = await Article.findById(articleId).lean();
+
+        if (!article) {
+            return res.status(404).json({ message: 'Article not found' });
+        }
+
+        // Store in Redis for future requests
+        await req.redisClient.set(cacheKey, JSON.stringify(article), {
+            EX: 3600 // Cache for 1 hour
+        });
+
+        res.json(article);
+    } catch (error) {
+        console.error('Error fetching article:', error);
+        res.status(500).json({ message: 'Error fetching article', error: error.message });
     }
 });
 
