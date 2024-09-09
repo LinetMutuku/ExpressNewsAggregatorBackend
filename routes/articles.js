@@ -5,51 +5,33 @@ const User = require('../models/User');
 const { authenticateUser } = require('../middleware/auth');
 const { getRecommendedArticles } = require('../services/RecommendedArticles');
 
-// Get all articles with caching
-router.get('/', async (req, res) => {
+// Get recommended articles
+router.get('/recommended', authenticateUser, async (req, res) => {
     try {
+        const userId = req.userId;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
-        const category = req.query.category;
-        const cacheKey = `articles:${page}:${limit}:${category || 'all'}`;
+        const cacheKey = `recommended:${userId}:${page}:${limit}`;
 
-        // Try to get articles from Redis
-        let cachedArticles = await req.redisClient.get(cacheKey);
+        // Try to get recommended articles from Redis
+        let recommendedArticles = await req.redisClient.get(cacheKey);
 
-        if (cachedArticles) {
-            return res.json(JSON.parse(cachedArticles));
+        if (recommendedArticles) {
+            return res.json(JSON.parse(recommendedArticles));
         }
 
-        // If not in cache, fetch from database
-        let query = {};
-        if (category) {
-            query.category = category;
-        }
+        // If not in cache, get recommendations
+        recommendedArticles = await getRecommendedArticles(userId, page, limit);
 
-        const articles = await Article.find(query)
-            .sort({ publishedAt: -1 })
-            .skip((page - 1) * limit)
-            .limit(limit)
-            .lean();
-
-        const totalArticles = await Article.countDocuments(query);
-
-        const result = {
-            articles,
-            currentPage: page,
-            totalPages: Math.ceil(totalArticles / limit),
-            totalArticles
-        };
-
-        // Cache the result
-        await req.redisClient.set(cacheKey, JSON.stringify(result), {
-            EX: 300 // Cache for 5 minutes
+        // Store in Redis for future requests
+        await req.redisClient.set(cacheKey, JSON.stringify(recommendedArticles), {
+            EX: 1800 // Cache for 30 minutes
         });
 
-        res.json(result);
+        res.json(recommendedArticles);
     } catch (error) {
-        console.error('Error fetching articles:', error);
-        res.status(500).json({ message: 'Error fetching articles', error: error.message });
+        console.error('Error in /recommended route:', error);
+        res.status(500).json({ message: 'Error fetching recommended articles', error: error.message });
     }
 });
 
@@ -99,33 +81,51 @@ router.get('/search', async (req, res) => {
     }
 });
 
-// Get recommended articles
-router.get('/recommended', authenticateUser, async (req, res) => {
+// Get all articles with caching
+router.get('/', async (req, res) => {
     try {
-        const userId = req.userId;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
-        const cacheKey = `recommended:${userId}:${page}:${limit}`;
+        const category = req.query.category;
+        const cacheKey = `articles:${page}:${limit}:${category || 'all'}`;
 
-        // Try to get recommended articles from Redis
-        let recommendedArticles = await req.redisClient.get(cacheKey);
+        // Try to get articles from Redis
+        let cachedArticles = await req.redisClient.get(cacheKey);
 
-        if (recommendedArticles) {
-            return res.json(JSON.parse(recommendedArticles));
+        if (cachedArticles) {
+            return res.json(JSON.parse(cachedArticles));
         }
 
-        // If not in cache, get recommendations
-        recommendedArticles = await getRecommendedArticles(userId, page, limit);
+        // If not in cache, fetch from database
+        let query = {};
+        if (category) {
+            query.category = category;
+        }
 
-        // Store in Redis for future requests
-        await req.redisClient.set(cacheKey, JSON.stringify(recommendedArticles), {
-            EX: 1800 // Cache for 30 minutes
+        const articles = await Article.find(query)
+            .sort({ publishedAt: -1 })
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .lean();
+
+        const totalArticles = await Article.countDocuments(query);
+
+        const result = {
+            articles,
+            currentPage: page,
+            totalPages: Math.ceil(totalArticles / limit),
+            totalArticles
+        };
+
+        // Cache the result
+        await req.redisClient.set(cacheKey, JSON.stringify(result), {
+            EX: 300 // Cache for 5 minutes
         });
 
-        res.json(recommendedArticles);
+        res.json(result);
     } catch (error) {
-        console.error('Error in /recommended route:', error);
-        res.status(500).json({ message: 'Error fetching recommended articles', error: error.message });
+        console.error('Error fetching articles:', error);
+        res.status(500).json({ message: 'Error fetching articles', error: error.message });
     }
 });
 

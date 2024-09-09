@@ -48,7 +48,7 @@ const articleRoutes = require('./routes/articles');
 const userRoutes = require('./routes/users');
 
 app.use('/api/auth', authRoutes);
-app.use('/api/articles', articleRoutes);
+app.use('/api/articles', articleRoutes);  // This line sets up the articles router
 app.use('/api/users', userRoutes);
 
 // Add a test route for Redis

@@ -13,53 +13,35 @@ async function getRecommendedArticles(userId, page = 1, limit = 20) {
             throw new Error('User not found');
         }
 
-        // Get user's reading history
-        const readArticles = await Article.find({ _id: { $in: user.readArticles || [] } });
-
-        // Extract keywords from read articles
-        const keywords = readArticles.reduce((acc, article) => {
-            const words = (article.title || '').toLowerCase().split(/\W+/);
-            words.forEach(word => {
-                if (word.length > 3) {
-                    acc[word] = (acc[word] || 0) + 1;
-                }
-            });
-            return acc;
-        }, {});
-
-        // Sort keywords by frequency and get top 10
-        const sortedKeywords = Object.entries(keywords)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 10)
-            .map(([word]) => word);
+        // Ensure preferences and readArticles are arrays
+        const userPreferences = Array.isArray(user.preferences.categories) ? user.preferences.categories : [];
+        const readArticles = Array.isArray(user.readArticles) ? user.readArticles : [];
 
         // Calculate skip value for pagination
         const skip = (page - 1) * limit;
 
-        // Find articles matching user preferences and keywords
+        // Find articles matching user preferences and excluding read articles
         const recommendedArticles = await Article.aggregate([
             {
                 $match: {
-                    $or: [
-                        { category: { $in: user.preferences || [] } },
-                        { title: { $regex: sortedKeywords.join('|'), $options: 'i' } }
-                    ],
-                    _id: { $nin: user.readArticles || [] } // Exclude already read articles
+                    $and: [
+                        { _id: { $nin: readArticles } },
+                        {
+                            $or: [
+                                { category: { $in: userPreferences } },
+                                { category: { $exists: true } } // Fallback to include all categories if no preferences
+                            ]
+                        }
+                    ]
                 }
             },
             {
                 $addFields: {
                     score: {
-                        $add: [
-                            { $cond: [{ $in: ['$category', user.preferences || []] }, 2, 0] },
-                            {
-                                $size: {
-                                    $setIntersection: [
-                                        sortedKeywords,
-                                        { $split: [{ $toLower: '$title' }, ' '] }
-                                    ]
-                                }
-                            }
+                        $cond: [
+                            { $in: ['$category', userPreferences] },
+                            2,  // Higher score for preferred categories
+                            1   // Lower score for other categories
                         ]
                     }
                 }
@@ -70,11 +52,11 @@ async function getRecommendedArticles(userId, page = 1, limit = 20) {
         ]);
 
         const totalRecommendations = await Article.countDocuments({
+            _id: { $nin: readArticles },
             $or: [
-                { category: { $in: user.preferences || [] } },
-                { title: { $regex: sortedKeywords.join('|'), $options: 'i' } }
-            ],
-            _id: { $nin: user.readArticles || [] }
+                { category: { $in: userPreferences } },
+                { category: { $exists: true } }
+            ]
         });
 
         return {
