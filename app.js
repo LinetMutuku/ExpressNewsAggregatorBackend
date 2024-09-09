@@ -48,36 +48,21 @@ const articleRoutes = require('./routes/articles');
 const userRoutes = require('./routes/users');
 
 app.use('/api/auth', authRoutes);
-app.use('/api/articles', articleRoutes);  // This line sets up the articles router
+app.use('/api/articles', articleRoutes);
 app.use('/api/users', userRoutes);
-
-// Add a test route for Redis
-app.get('/test-redis', async (req, res) => {
-    try {
-        await redisClient.set('test_key', 'Hello Redis!', {
-            EX: 60
-        });
-        const value = await redisClient.get('test_key');
-        res.json({ message: 'Redis test successful', value });
-    } catch (error) {
-        res.status(500).json({ message: 'Redis test failed', error: error.message });
-    }
-});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
-    res.status(500).json({ message: 'Something went wrong!', error: err.message });
+    console.error('Unhandled error:', err);
+    res.status(500).json({ message: 'Something went wrong!', error: err.message, stack: err.stack });
 });
 
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    // Fetch articles immediately when the server starts
     fetchAndStoreArticles().catch(error => {
         console.error('Error fetching articles on server start:', error);
     });
-    // Set up periodic fetching (e.g., every hour)
     setInterval(() => {
         fetchAndStoreArticles().catch(error => {
             console.error('Error fetching articles in interval:', error);
@@ -98,6 +83,11 @@ process.on('SIGTERM', () => {
             });
         });
     });
+});
+
+// Global promise rejection handler
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 module.exports = app;
