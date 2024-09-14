@@ -1,24 +1,28 @@
 const Article = require('../models/Article');
 const User = require('../models/User');
-const mongoose = require('mongoose');
+const Redis = require('ioredis');
+
+const redisClient = new Redis(process.env.REDIS_URL);
 
 async function getRecommendedArticles(userId, page = 1, limit = 20) {
     try {
-        if (!mongoose.Types.ObjectId.isValid(userId)) {
-            throw new Error('Invalid userId format');
-        }
-
-        const user = await User.findById(userId);
+        const user = await User.findById(userId).lean();
         if (!user) {
             throw new Error('User not found');
         }
 
-        const userPreferences = Array.isArray(user.preferences.categories) ? user.preferences.categories : [];
-        const readArticles = Array.isArray(user.readArticles) ? user.readArticles : [];
+        const userPreferences = user.preferences?.categories || [];
+        const readArticles = user.readArticles || [];
+
+        const cacheKey = `user:${userId}:recommendations:${page}:${limit}`;
+        const cachedRecommendations = await redisClient.get(cacheKey);
+
+        if (cachedRecommendations) {
+            return JSON.parse(cachedRecommendations);
+        }
 
         const skip = (page - 1) * limit;
 
-        // Simplified query to fetch articles
         const recommendedArticles = await Article.find({
             _id: { $nin: readArticles },
             category: { $in: userPreferences.length > 0 ? userPreferences : { $exists: true } }
@@ -33,12 +37,16 @@ async function getRecommendedArticles(userId, page = 1, limit = 20) {
             category: { $in: userPreferences.length > 0 ? userPreferences : { $exists: true } }
         });
 
-        return {
+        const result = {
             recommendations: recommendedArticles,
             currentPage: page,
             totalPages: Math.ceil(totalRecommendations / limit),
             totalRecommendations
         };
+
+        await redisClient.set(cacheKey, JSON.stringify(result), 'EX', 1800); // Cache for 30 minutes
+
+        return result;
     } catch (error) {
         console.error('Error in recommendation service:', error);
         throw error;
