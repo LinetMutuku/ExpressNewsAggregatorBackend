@@ -4,6 +4,7 @@ const Article = require('../models/Article');
 const User = require('../models/User');
 const { authenticateUser } = require('../middleware/auth');
 const { getRecommendedArticles } = require('../services/RecommendedArticles');
+const { promisify } = require('util');
 
 // Get recommended articles
 router.get('/recommended', authenticateUser, async (req, res) => {
@@ -16,7 +17,7 @@ router.get('/recommended', authenticateUser, async (req, res) => {
 
         // Try to get recommended articles from Redis cache
         console.log('Checking Redis cache for recommended articles');
-        let recommendedArticles = await req.redisClient.get(cacheKey);
+        let recommendedArticles = await promisify(req.redisClient.get).bind(req.redisClient)(cacheKey);
 
         if (recommendedArticles) {
             console.log('Recommended articles found in cache');
@@ -29,9 +30,7 @@ router.get('/recommended', authenticateUser, async (req, res) => {
 
         // Store in Redis for future requests
         console.log('Caching recommendations in Redis');
-        await req.redisClient.set(cacheKey, JSON.stringify(recommendedArticles), {
-            EX: 1800 // Cache for 30 minutes
-        });
+        await promisify(req.redisClient.setex).bind(req.redisClient)(cacheKey, 1800, JSON.stringify(recommendedArticles));
 
         console.log('Sending recommendations to client');
         res.json(recommendedArticles);
@@ -52,7 +51,7 @@ router.get('/search', async (req, res) => {
 
         // Try to get search results from Redis
         console.log('Checking Redis cache for search results');
-        let cachedResults = await req.redisClient.get(cacheKey);
+        let cachedResults = await promisify(req.redisClient.get).bind(req.redisClient)(cacheKey);
 
         if (cachedResults) {
             console.log('Search results found in cache');
@@ -73,7 +72,7 @@ router.get('/search', async (req, res) => {
         const totalResults = await Article.countDocuments({ $text: { $search: query } });
 
         const response = {
-            results,
+            articles: results,
             currentPage: page,
             totalPages: Math.ceil(totalResults / limit),
             totalResults
@@ -81,9 +80,7 @@ router.get('/search', async (req, res) => {
 
         // Store in Redis for future requests
         console.log('Caching search results in Redis');
-        await req.redisClient.set(cacheKey, JSON.stringify(response), {
-            EX: 900 // Cache for 15 minutes
-        });
+        await promisify(req.redisClient.setex).bind(req.redisClient)(cacheKey, 900, JSON.stringify(response));
 
         console.log('Sending search results to client');
         res.json(response);
@@ -104,7 +101,7 @@ router.get('/', async (req, res) => {
 
         // Try to get articles from Redis
         console.log('Checking Redis cache for articles');
-        let cachedArticles = await req.redisClient.get(cacheKey);
+        let cachedArticles = await promisify(req.redisClient.get).bind(req.redisClient)(cacheKey);
 
         if (cachedArticles) {
             console.log('Articles found in cache');
@@ -135,9 +132,7 @@ router.get('/', async (req, res) => {
 
         // Cache the result
         console.log('Caching articles in Redis');
-        await req.redisClient.set(cacheKey, JSON.stringify(result), {
-            EX: 300 // Cache for 5 minutes
-        });
+        await promisify(req.redisClient.setex).bind(req.redisClient)(cacheKey, 300, JSON.stringify(result));
 
         console.log('Sending articles to client');
         res.json(result);
@@ -161,9 +156,9 @@ router.post('/:id/read', authenticateUser, async (req, res) => {
         // Invalidate the user's recommended articles cache
         console.log(`Invalidating recommended articles cache for user: ${userId}`);
         const cachePattern = `recommended:${userId}:*`;
-        const keys = await req.redisClient.keys(cachePattern);
+        const keys = await promisify(req.redisClient.keys).bind(req.redisClient)(cachePattern);
         if (keys.length > 0) {
-            await req.redisClient.del(keys);
+            await promisify(req.redisClient.del).bind(req.redisClient)(keys);
         }
 
         console.log('Article marked as read successfully');
@@ -183,7 +178,7 @@ router.get('/:id', async (req, res) => {
 
         // Try to get the article from Redis
         console.log(`Checking Redis cache for article: ${articleId}`);
-        let article = await req.redisClient.get(cacheKey);
+        let article = await promisify(req.redisClient.get).bind(req.redisClient)(cacheKey);
 
         if (article) {
             console.log('Article found in cache');
@@ -201,9 +196,7 @@ router.get('/:id', async (req, res) => {
 
         // Store in Redis for future requests
         console.log('Caching article in Redis');
-        await req.redisClient.set(cacheKey, JSON.stringify(article), {
-            EX: 3600 // Cache for 1 hour
-        });
+        await promisify(req.redisClient.setex).bind(req.redisClient)(cacheKey, 3600, JSON.stringify(article));
 
         console.log('Sending article to client');
         res.json(article);
