@@ -1,8 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const NodeCache = require('node-cache');
-
-const userCache = new NodeCache({ stdTTL: 300 }); // Cache for 5 minutes
+const { promisify } = require('util');
 
 exports.authenticateUser = async (req, res, next) => {
     console.log('Authenticating user...');
@@ -19,7 +17,9 @@ exports.authenticateUser = async (req, res, next) => {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         console.log('Decoded token:', decoded);
 
-        let user = userCache.get(decoded.user.id);
+        const cacheKey = `user:${decoded.user.id}`;
+        let user = await promisify(req.redisClient.get).bind(req.redisClient)(cacheKey);
+
         if (!user) {
             console.log('User not in cache, fetching from database...');
             user = await User.findById(decoded.user.id).select('-password').lean();
@@ -28,9 +28,10 @@ exports.authenticateUser = async (req, res, next) => {
                 return res.status(401).json({ message: 'User not found' });
             }
             console.log('Caching user');
-            userCache.set(decoded.user.id, user);
+            await promisify(req.redisClient.setex).bind(req.redisClient)(cacheKey, 300, JSON.stringify(user));
         } else {
             console.log('User found in cache');
+            user = JSON.parse(user);
         }
 
         req.user = user;
@@ -39,6 +40,9 @@ exports.authenticateUser = async (req, res, next) => {
         next();
     } catch (err) {
         console.error('Authentication error:', err);
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({ message: 'Token has expired' });
+        }
         res.status(401).json({ message: 'Token is not valid', error: err.message });
     }
 };
