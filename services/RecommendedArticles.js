@@ -23,19 +23,19 @@ async function getRecommendedArticles(userId, page = 1, limit = 20) {
 
         const skip = (page - 1) * limit;
 
-        const recommendedArticles = await Article.find({
-            _id: { $nin: readArticles },
-            category: { $in: userPreferences.length > 0 ? userPreferences : { $exists: true } }
-        })
+        let query = { _id: { $nin: readArticles } };
+
+        if (userPreferences.length > 0) {
+            query.category = { $in: userPreferences };
+        }
+
+        const recommendedArticles = await Article.find(query)
             .sort({ publishedAt: -1 })
             .skip(skip)
             .limit(limit)
             .lean();
 
-        const totalRecommendations = await Article.countDocuments({
-            _id: { $nin: readArticles },
-            category: { $in: userPreferences.length > 0 ? userPreferences : { $exists: true } }
-        });
+        const totalRecommendations = await Article.countDocuments(query);
 
         const result = {
             recommendations: recommendedArticles,
@@ -52,5 +52,4 @@ async function getRecommendedArticles(userId, page = 1, limit = 20) {
         throw error;
     }
 }
-
 module.exports = { getRecommendedArticles };
