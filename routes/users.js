@@ -72,31 +72,37 @@ router.get('/saved-articles', authenticateUser, async (req, res) => {
 router.post('/save-article', authenticateUser, async (req, res) => {
     try {
         const userId = req.userId;
-        const articleData = req.body;
+        const { articleId } = req.body;
 
-        console.log('Received article data:', articleData);
+        console.log('Received article data:', { articleId });
 
-        if (!articleData.articleId) {
+        if (!articleId) {
             return res.status(400).json({ message: 'Article ID is required' });
         }
 
         // Check if the article is already saved
-        const existingArticle = await SavedArticle.findOne({ user: userId, articleId: articleData.articleId });
+        const existingArticle = await SavedArticle.findOne({ user: userId, articleId: articleId });
         if (existingArticle) {
             console.log('Article already saved for user:', userId);
             return res.status(200).json({ message: 'Article already saved', article: existingArticle });
         }
 
+        // Fetch the article details from your articles collection
+        const articleDetails = await Article.findById(articleId);
+        if (!articleDetails) {
+            return res.status(404).json({ message: 'Article not found' });
+        }
+
         const savedArticle = new SavedArticle({
             user: userId,
-            articleId: articleData.articleId,
-            title: articleData.title,
-            description: articleData.description,
-            imageUrl: articleData.imageUrl || 'https://via.placeholder.com/300x200?text=No+Image',
-            publishedAt: articleData.publishedAt,
-            source: articleData.source,
-            category: articleData.category,
-            url: articleData.url
+            articleId: articleId,
+            title: articleDetails.title,
+            description: articleDetails.description,
+            imageUrl: articleDetails.imageUrl,
+            publishedAt: articleDetails.publishedAt,
+            source: articleDetails.source,
+            category: articleDetails.category,
+            url: articleDetails.url
         });
 
         await savedArticle.save();
@@ -107,7 +113,6 @@ router.post('/save-article', authenticateUser, async (req, res) => {
         res.status(500).json({ message: 'Error saving article', error: error.message });
     }
 });
-
 // Unsave (delete) an article
 router.delete('/saved-article/:articleId', authenticateUser, async (req, res) => {
     try {
