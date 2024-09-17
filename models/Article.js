@@ -13,11 +13,11 @@ const articleSchema = new mongoose.Schema({
     isSaved: { type: Boolean, default: false }
 }, { timestamps: true });
 
-// Create indexes for optimizing queries on category and publishedAt
+
 articleSchema.index({ category: 1 });
 articleSchema.index({ publishedAt: -1 });
 
-// Create a weighted text index for more relevant search results
+
 articleSchema.index(
     {
         title: 'text',
@@ -34,4 +34,6 @@ articleSchema.index(
     }
 );
 
-module.exports = mongoose.model('Article', articleSchema);
+const Article = mongoose.model('Article', articleSchema);
+
+module.exports = Article;

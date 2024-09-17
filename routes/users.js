@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const SavedArticle = require('../models/SavedArticle');
+const Article = require('../models/Article');
 const { authenticateUser } = require('../middleware/auth');
 
 // Get user preferences
@@ -69,15 +70,6 @@ router.get('/saved-articles', authenticateUser, async (req, res) => {
 });
 
 // Save an article
-const express = require('express');
-const router = express.Router();
-const User = require('../models/User');
-const SavedArticle = require('../models/SavedArticle');
-const Article = require('../models/Article'); // Add this line
-const { authenticateUser } = require('../middleware/auth');
-
-// ... rest of your code ...
-
 router.post('/save-article', authenticateUser, async (req, res) => {
     try {
         const userId = req.userId;
@@ -124,7 +116,7 @@ router.post('/save-article', authenticateUser, async (req, res) => {
 });
 
 // Unsave (delete) an article
-router.delete('/saved-article/:articleId', authenticateUser, async (req, res) => {
+router.delete('/save-article/:articleId', authenticateUser, async (req, res) => {
     try {
         const userId = req.userId;
         const articleId = req.params.articleId;
@@ -145,7 +137,6 @@ router.delete('/saved-article/:articleId', authenticateUser, async (req, res) =>
         res.status(500).json({ message: 'Internal server error', error: error.message });
     }
 });
-
 // Get user profile
 router.get('/profile', authenticateUser, async (req, res) => {
     try {
