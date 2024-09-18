@@ -116,12 +116,18 @@ router.post('/save-article', authenticateUser, async (req, res) => {
 });
 
 // Unsave (delete) an article
+
+
 router.delete('/save-article/:articleId', authenticateUser, async (req, res) => {
     try {
         const userId = req.userId;
         const articleId = req.params.articleId;
 
         console.log(`Attempting to unsave article. User ID: ${userId}, Article ID: ${articleId}`);
+
+        // Log all saved articles for this user
+        const allSavedArticles = await SavedArticle.find({ user: userId });
+        console.log('All saved articles for user:', allSavedArticles.map(a => a.articleId));
 
         const result = await SavedArticle.findOneAndDelete({ user: userId, articleId: articleId });
 
@@ -137,6 +143,11 @@ router.delete('/save-article/:articleId', authenticateUser, async (req, res) => 
         res.status(500).json({ message: 'Internal server error', error: error.message });
     }
 });
+
+
+
+
+
 // Get user profile
 router.get('/profile', authenticateUser, async (req, res) => {
     try {
