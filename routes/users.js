@@ -116,7 +116,31 @@ router.post('/save-article', authenticateUser, async (req, res) => {
 });
 
 
-router.delete('/save-article/:articleId', authenticateUser, async (req, res) => {
+router.delete('/delete-article/:articleId', authenticateUser, async (req, res) => {
+    try {
+        const articleId = req.params.articleId;
+
+        console.log(`Attempting to delete article. Article ID: ${articleId}`);
+
+        const result = await Article.findByIdAndDelete(articleId);
+
+        if (result) {
+            console.log(`Article deleted successfully. Article ID: ${articleId}`);
+            // Also remove from SavedArticles if it exists there
+            await SavedArticle.deleteMany({ articleId: articleId });
+            res.json({ message: 'Article deleted successfully' });
+        } else {
+            console.log(`Article not found. Article ID: ${articleId}`);
+            res.status(404).json({ message: 'Article not found' });
+        }
+    } catch (error) {
+        console.error('Error deleting article:', error);
+        res.status(500).json({ message: 'Internal server error', error: error.message });
+    }
+});
+
+// Unsave an article
+router.delete('/unsave-article/:articleId', authenticateUser, async (req, res) => {
     try {
         const userId = req.userId;
         const articleId = req.params.articleId;
@@ -137,8 +161,6 @@ router.delete('/save-article/:articleId', authenticateUser, async (req, res) => 
         res.status(500).json({ message: 'Internal server error', error: error.message });
     }
 });
-
-
 // Get user profile
 router.get('/profile', authenticateUser, async (req, res) => {
     try {

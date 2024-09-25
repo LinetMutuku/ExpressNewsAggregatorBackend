@@ -24,7 +24,6 @@ exports.authenticateUser = async (req, res, next) => {
 
         console.log('Verifying token...');
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        console.log('Decoded token:', decoded);
 
         const user = await User.findById(decoded.user.id).select('-password').lean();
         if (!user) {
